@@ -1,0 +1,23 @@
+# Core NiFi/Registry client
+nipyapi>=0.22.0
+
+# (Optional) load env vars from a .env file
+python-dotenv>=1.0.1
+
+# (Optional) if you plan to call NiFi APIs directly or tweak TLS, these are handy
+requests>=2.31.0
+urllib3>=1.26.18
+
+# Kafka integration for message-driven deployments
+kafka-python>=2.0.2
+confluent-kafka>=2.1.1
+
+# Configuration management
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Retry logic
+tenacity>=8.2.2
+
+# HashiCorp Vault integration for secure secrets management
+hvac>=2.0.0
