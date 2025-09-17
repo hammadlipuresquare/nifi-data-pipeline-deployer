@@ -18,6 +18,8 @@ class OrchestratorConfig(BaseSettings):
     # Kafka Configuration (for orchestrator)
     kafka_bootstrap_servers: str = Field(default="localhost:9093", env="KAFKA_BOOTSTRAP_SERVERS")
     kafka_deployment_topic: str = Field(default="nifi-pipeline-deployments", env="KAFKA_DEPLOYMENT_TOPIC")
+    kafka_credentials_topic: str = Field(default="nifi-credentials-updates", env="KAFKA_CREDENTIALS_TOPIC")
+    kafka_deletions_topic: str = Field(default="nifi-integration-deletions", env="KAFKA_DELETIONS_TOPIC")
     kafka_response_topic: str = Field(default="nifi-pipeline-responses", env="KAFKA_RESPONSE_TOPIC")
     kafka_consumer_group: str = Field(default="nifi-pipeline-deployer", env="KAFKA_CONSUMER_GROUP")
     kafka_enable_auto_commit: bool = Field(default=False, env="KAFKA_ENABLE_AUTO_COMMIT")
@@ -25,6 +27,8 @@ class OrchestratorConfig(BaseSettings):
     kafka_session_timeout_ms: int = Field(default=30000, env="KAFKA_SESSION_TIMEOUT_MS")
     kafka_max_poll_records: int = Field(default=5, env="KAFKA_MAX_POLL_RECORDS")
     kafka_max_poll_interval_ms: int = Field(default=300000, env="KAFKA_MAX_POLL_INTERVAL_MS")
+    backoff_base_ms: int = Field(default=500, env="KAFKA_BACKOFF_BASE_MS")
+    backoff_max_ms: int = Field(default=60000, env="KAFKA_BACKOFF_MAX_MS")
     
     # NiFi Pipeline Kafka Configuration (for deployed pipelines)
     nifi_kafka_bootstrap_servers: str = Field(default="kafka.apache:9092", env="NIFI_KAFKA_BOOTSTRAP_SERVERS")

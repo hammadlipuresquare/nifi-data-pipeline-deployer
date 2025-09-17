@@ -2,11 +2,19 @@
 
 import json
 import time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Tuple
 from confluent_kafka import Consumer, Producer, KafkaError
+from confluent_kafka.admin import AdminClient, NewTopic
 from ..config import config
-from ..integrations import deploy_integration, get_available_integrations, deploy_aws_asset_registry_pipeline, \
-    deploy_jumpcloud_pipeline
+from ..integrations import (
+    get_available_integrations,
+    deploy_aws_asset_registry_pipeline,
+    deploy_jumpcloud_pipeline,
+    update_integration_secrets, stop_integration
+)
+from ..nifi.params import parameter_manager
+from ..nifi.flows import flow_manager
+from ..utils.integration_category import INTEGRATION_CATEGORIES
 from ..exceptions import OrchestratorError
 from ..logging import LoggerMixin
 
@@ -28,7 +36,9 @@ class KafkaWorker(LoggerMixin):
 
             self.logger.info("Kafka consumer initialized successfully")
             self.logger.info(f"Kafka servers: {config.kafka_bootstrap_servers}")
-            self.logger.info(f"Listening to: {config.kafka_deployment_topic}")
+            self.logger.info(
+                f"Listening to: {config.kafka_deployment_topic}, {config.kafka_credentials_topic}, {config.kafka_deletions_topic}"
+            )
             self.logger.info(f"Responses to: {config.kafka_response_topic}")
             self.logger.info(f"Consumer group: {config.kafka_consumer_group}")
 
@@ -85,8 +95,12 @@ class KafkaWorker(LoggerMixin):
         self.consumer = Consumer(consumer_config)
         self.producer = Producer(producer_config)
 
-        # Subscribe to deployment topic
-        self.consumer.subscribe([config.kafka_deployment_topic])
+        # Subscribe to all topics in the same consumer group
+        self.consumer.subscribe([
+            config.kafka_deployment_topic,
+            config.kafka_credentials_topic,
+            config.kafka_deletions_topic,
+        ])
 
         self.logger.info("Kafka clients set up successfully")
 
@@ -106,15 +120,39 @@ class KafkaWorker(LoggerMixin):
                     if msg.error():
                         if msg.error().code() == KafkaError._PARTITION_EOF:
                             continue
+                        elif msg.error().code() == KafkaError.UNKNOWN_TOPIC_OR_PART:
+                            try:
+                                missing_topic = msg.topic()
+                                self.logger.warning(
+                                    f"Topic '{missing_topic}' not found. Attempting to create it..."
+                                )
+                                self._ensure_topic_exists(missing_topic)
+                                # Give broker a moment to register the new topic
+                                time.sleep(1.0)
+                            except Exception as e:
+                                self.logger.error(f"Failed to ensure topic exists: {e}")
+                            continue
                         else:
                             self.logger.error(f"Kafka error: {msg.error()}")
                             continue
 
-                    # Process the message
+                    # Process the message by topic
                     self.logger.info(f"Received message from {msg.topic()}:{msg.partition()}:{msg.offset()}")
 
                     try:
-                        success = self._process_single_message(msg.value())
+                        topic = msg.topic()
+                        message = msg.value()
+
+                        match topic:
+                            case config.kafka_deployment_topic:
+                                success = self._process_deployment_message(message)
+                            case config.kafka_credentials_topic:
+                                success = self._process_credentials_update(message)
+                            case config.kafka_deletions_topic:
+                                success = self._process_deletion_message(message)
+                            case _:
+                                self.logger.warning(f"Unknown Topic: {topic} skipping")
+                                success = False
 
                         if success:
                             self.logger.info(f"Message processed successfully, offset: {msg.offset()}")
@@ -142,67 +180,43 @@ class KafkaWorker(LoggerMixin):
             self.logger.error(f"Fatal error in message processing: {e}")
             raise
 
-    def _process_single_message(self, raw_message: bytes) -> bool:
+    def _process_deployment_message(self, raw_message: bytes) -> bool:
         """
-        Process a single Kafka message.
-        
-        Args:
-            raw_message: Raw message bytes
-            
-        Returns:
-            True if processing succeeded, False otherwise
+        Process deployment message.
         """
         start_time = time.time()
         data = None
 
         try:
-            # Parse message
-            data = json.loads(raw_message.decode('utf-8'))
+            tenant_id, integration_name = self._extract_and_validate_tenant_id_and_integration(raw_message)
 
-            # Extract fields (support both legacy and new formats)
-            tenant_id = data.get("tenant_id", "")
-            integration = data.get("integration") or data.get("pipeline", "").lower()
-            parameters = data.get("parameters", {})
-            api_key = parameters.get("api_key", "")
-            message_id = data.get("message_id", "")
-            flow_name = data.get("flow_name")  # Optional
-            version = data.get("version", "latest")
+            version = "latest"
 
-            # Validate required fields
-            if not tenant_id:
-                raise ValueError("tenant_id is required")
-            # if not api_key:
-            #     raise ValueError("api_key is required in parameters")
-            if not integration:
-                raise ValueError("integration/pipeline is required")
-
-            self.logger.info(f"🚀 Processing {integration} deployment for tenant: {tenant_id}")
+            self.logger.info(f"🚀 Processing {integration_name} deployment for tenant: {tenant_id}")
 
             # Switch case logic for different integrations
-            match integration:
+            match integration_name:
                 case "jumpcloud":
                     result = deploy_jumpcloud_pipeline(tenant_id=tenant_id, version=version)
-
                 case "aws":
                     result = deploy_aws_asset_registry_pipeline(tenant_id=tenant_id, version=version)
                 case _:
                     available = ", ".join(get_available_integrations())
-                    raise ValueError(f"Unsupported integration '{integration}'. Available: {available}")
+                    raise ValueError(f"Unsupported integration '{integration_name}'. Available: {available}")
 
             # Send success response
             success_response = {
                 "success": True,
                 "tenant_id": tenant_id,
-                "integration": integration,
+                "integration": integration_name,
                 "timestamp": time.time(),
                 "result": result,
                 "error": None,
-                "message_id": message_id,
                 "processing_time_seconds": time.time() - start_time
             }
 
             self._send_response(success_response)
-            self.logger.info(f"✅ Successfully deployed {integration} pipeline for {tenant_id}")
+            self.logger.info(f"✅ Successfully deployed {integration_name} pipeline for {tenant_id}")
             return True
 
         except ValueError as e:
@@ -227,6 +241,28 @@ class KafkaWorker(LoggerMixin):
             }
 
             self._send_response(error_response)
+            return False
+
+    def _process_credentials_update(self, raw_message: bytes) -> bool:
+        """Handle credentials rotation events: upsert Vault secrets into tenant parameter context."""
+        try:
+            tenant_id, integration_name = self._extract_and_validate_tenant_id_and_integration(raw_message)
+
+            update_integration_secrets(tenant_id, integration_name)
+            return True
+        except Exception as e:
+            self.logger.error(f"Credentials update failed: {e}")
+            return False
+
+    def _process_deletion_message(self, raw_message: bytes) -> bool:
+        """Handle deletion events: stop the integration process group for a tenant."""
+        try:
+            tenant_id, integration_name = self._extract_and_validate_tenant_id_and_integration(raw_message)
+
+            stop_integration(tenant_id, integration_name)
+            return True
+        except Exception as e:
+            self.logger.error(f"Deletion handling failed: {e}")
             return False
 
     def _send_response(self, response: Dict[str, Any]) -> None:
@@ -273,6 +309,37 @@ class KafkaWorker(LoggerMixin):
             self.logger.error(f"Error during cleanup: {e}")
 
         self.logger.info("Kafka worker stopped")
+
+    def _ensure_topic_exists(self, topic: str, num_partitions: int = 1, replication_factor: int = 1) -> None:
+        """Create a Kafka topic if it does not exist (idempotent)."""
+        try:
+            admin = AdminClient({'bootstrap.servers': config.kafka_bootstrap_servers})
+            md = admin.list_topics(timeout=5)
+            if topic in md.topics and not md.topics[topic].error:
+                self.logger.info(f"Topic '{topic}' already exists")
+                return
+
+            fs = admin.create_topics([NewTopic(topic, num_partitions=num_partitions,
+                                               replication_factor=replication_factor)])
+            # Wait for result
+            for t, f in fs.items():
+                try:
+                    f.result(timeout=10)
+                    self.logger.info(f"✅ Created topic '{t}'")
+                except Exception as e:
+                    # If it's already created by a race, log and continue
+                    self.logger.info(f"Topic '{t}' create result: {e}")
+        except Exception as e:
+            self.logger.warning(f"Could not ensure topic '{topic}' exists: {e}")
+
+    def _extract_and_validate_tenant_id_and_integration(self, raw_message) -> Tuple[str, str]:
+        """Extract and validate tenant ID and integration."""
+        data = json.loads(raw_message.decode("utf-8"))
+        tenant_id = data.get("tenant_id")
+        integration = (data.get("integration") or "").lower()
+        if not tenant_id or not integration: raise ValueError(
+            "tenant_id and integration are required for credentials updates")
+        return tenant_id, integration
 
 
 # Global worker instance

@@ -372,8 +372,83 @@ class ParameterManager(LoggerMixin):
         except Exception as e:
             self.logger.error(f"Failed to add parameters to context {pc_id}: {e}")
 
+    def _compute_desired_param_entries(self, parameter_specs: Dict[str, Dict[str, Any]],
+                                       integration_type: str, integration_params: Dict[str, Any],
+                                       tenant_id: str) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        for param_name, param_config in parameter_specs.items():
+            source_key = param_config["source"]
+            if source_key == "tenant_id":
+                value = tenant_id
+            else:
+                value = integration_params.get(source_key, f"<missing-{source_key}>")
+
+            entries.append({
+                "parameter": {
+                    "name": param_name,
+                    "description": f"{param_config['description']} (for {integration_type})",
+                    "sensitive": bool(param_config["sensitive"]),
+                    "value": str(value)
+                }
+            })
+        return entries
+
+    def _upsert_parameters_to_context(self, pc_id: str, parameter_specs: Dict[str, Dict[str, Any]],
+                                      integration_type: str, integration_params: Dict[str, Any],
+                                      tenant_id: str, dry_run: bool = False) -> None:
+        """Add missing parameters and update changed values in-place. No blind overwrite."""
+        pc = self.get_parameter_context(pc_id)
+        if not pc:
+            self.logger.warning(f"Could not retrieve parameter context {pc_id} for upsert")
+            return
+
+        desired_entries = self._compute_desired_param_entries(parameter_specs, integration_type,
+                                                              integration_params, tenant_id)
+        current_params = pc.get("component", {}).get("parameters", [])
+        current_map = {p["parameter"]["name"]: p["parameter"] for p in current_params}
+
+        to_change: List[Dict[str, Any]] = []
+        for entry in desired_entries:
+            p = entry["parameter"]
+            name = p["name"]
+            sensitive = bool(p.get("sensitive", False))
+            current = current_map.get(name)
+            if current is None:
+                to_change.append(entry)
+            else:
+                # If sensitive, we cannot compare reliably → update to ensure correctness
+                if sensitive or str(current.get("value", "")) != str(p.get("value", "")):
+                    to_change.append(entry)
+
+        if not to_change:
+            self.logger.info("Parameter context already up-to-date; no changes needed")
+            return
+
+        def _mask(v: Dict[str, Any]) -> str:
+            if v.get("parameter", {}).get("sensitive", False):
+                return f"{v['parameter']['name']}=<redacted>"
+            return f"{v['parameter']['name']}={v['parameter'].get('value','')}"
+
+        if dry_run:
+            self.logger.info("[DRY-RUN] Would upsert parameters: " + ", ".join(_mask(x) for x in to_change))
+            return
+
+        update_body = {
+            "revision": pc.get("revision", {"version": 0}),
+            "component": {
+                "id": pc_id,
+                "name": pc.get("component", {}).get("name", ""),
+                "description": pc.get("component", {}).get("description", ""),
+                "parameters": to_change
+            }
+        }
+
+        nifi_client.post_json(f"parameter-contexts/{pc_id}/update-requests", update_body)
+        self.logger.info("Applied parameter updates: " + ", ".join(_mask(x) for x in to_change))
+
     def ensure_tenant_parameter_context(self, tenant_id: str, integration_type: str,
-                                        additional_params: Optional[Dict[str, Any]] = None) -> str:
+                                        additional_params: Optional[Dict[str, Any]] = None,
+                                        dry_run: bool = False) -> str:
         """
         Main entry point for smart parameter context management.
         Creates or updates parameter context with integration-specific parameters.
@@ -421,23 +496,36 @@ class ParameterManager(LoggerMixin):
 
         # Prepare integration parameters
         integration_params = {"tenant_id": tenant_id}
-
-        # Add additional parameters if provided
-        if additional_params: integration_params.update(additional_params)
+        if additional_params:
+            integration_params.update(additional_params)
 
         self.logger.info(f"Creating/updating smart parameter context for {tenant_id} - {integration_type}")
         self.logger.info(f"Required parameters: {list(parameter_specs.keys())}")
 
+        # Check-before-update behavior
+        pc_name = f"{tenant_id}-context"
+        existing_pc_id = self.find_parameter_context_by_name(pc_name)
+
         try:
-            return self.ensure_smart_parameter_context(
-                tenant_id=tenant_id,
-                integration_type=integration_type,
-                integration_params=integration_params,
-                parameter_specs=parameter_specs
-            )
+            if existing_pc_id:
+                self._upsert_parameters_to_context(existing_pc_id, parameter_specs, integration_type,
+                                                   integration_params, tenant_id, dry_run=dry_run)
+                return existing_pc_id
+            else:
+                desired = self._compute_desired_param_entries(parameter_specs, integration_type,
+                                                              integration_params, tenant_id)
+                if dry_run:
+                    self.logger.info(f"[DRY-RUN] Would create parameter context {pc_name} with params: "
+                                     + ", ".join([(''+(''+p['parameter']['name'])+'=<redacted>' if p['parameter'].get('sensitive') else p['parameter']['name']+'='+str(p['parameter'].get('value',''))) for p in desired]))
+                    return pc_name
+                pc = self.create_parameter_context(
+                    name=pc_name,
+                    description=f"Smart parameter context for tenant: {tenant_id}",
+                    parameters=desired
+                )
+                return pc["id"]
         except Exception as e:
-            self.logger.error(f"Failed to create smart parameter context: {e}")
-            # Return fallback ID on any error
+            self.logger.error(f"Failed to ensure/update parameter context {pc_name}: {e}")
             return "unsupported-parameter-context"
 
     def bind_parameter_context(self, pg_id: str, pc_id: str) -> Dict[str, Any]:
@@ -499,6 +587,18 @@ class ParameterManager(LoggerMixin):
         except Exception as e:
             self.logger.warning(f"Failed to bind parameter context {pc_id} to process group {pg_id}: {e}")
             return {"note": "Parameter context binding failed", "error": str(e)}
+
+    def get_process_group_bound_pc_id(self, pg_id: str) -> Optional[str]:
+        """Return the currently bound parameter context ID for a process group, if any."""
+        try:
+            pg = flow_manager.get_process_group(pg_id)
+            if not pg:
+                return None
+            component = pg.get("component", {})
+            pc = component.get("parameterContext", {})
+            return pc.get("id") if pc else None
+        except Exception:
+            return None
 
     def get_parameter_context_info(self, pc_id: str) -> Optional[ParameterContextInfo]:
         """Get parameter context information."""

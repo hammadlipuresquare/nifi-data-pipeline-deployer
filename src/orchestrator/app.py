@@ -147,31 +147,6 @@ class OrchestratorApp:
 
 def main():
     """Main entry point."""
-    # import sys
-    
-    # # Check for demo mode (preserves original main.py behavior)
-    # if len(sys.argv) > 1 and sys.argv[1] == "--demo":
-    #     from .integrations import deploy_jumpcloud_pipeline, list_buckets_and_flows, get_nifi_version
-    #
-    #     print(f"NiFi Version: {get_nifi_version()}")
-    #     print("\n=== Available Buckets and Flows ===")
-    #     list_buckets_and_flows()
-    #     print("\n" + "="*50)
-    #     print("Deploying JumpCloud Pipeline...")
-    #     print("="*50)
-    #
-    #     try:
-    #         result = deploy_jumpcloud_pipeline(
-    #             tenant_id="PureVPN",
-    #             api_key="new-api-key-999",
-    #             flow_name="JumpCloudPipelineAsset"  # Use actual flow name
-    #         )
-    #         print(f"\n🎉 Deployment Result: {result}")
-    #     except Exception as e:
-    #         print(f"❌ Demo deployment failed: {e}")
-    #     return
-    #
-    # Normal orchestrator mode
     app = OrchestratorApp()
     app.run()
 

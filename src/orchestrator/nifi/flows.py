@@ -7,6 +7,7 @@ from .registry import registry_manager, FlowVersionInfo
 from ..exceptions import NiFiAPIError, IdempotencyConflict
 from ..utils.idempotency import get_or_create
 from ..logging import LoggerMixin
+from ..utils.integration_category import INTEGRATION_NIFI_FLOW_NAMES
 
 
 @dataclass
@@ -62,13 +63,16 @@ class FlowManager(LoggerMixin):
     
     def list_child_process_groups(self, parent_id: str = "root") -> List[Dict[str, Any]]:
         """List child process groups of a parent."""
-        data = nifi_client.get_json(f"process-groups/{parent_id}/process-groups")
-        return data.get("processGroups", [])
-    
+        data = nifi_client.get_json(f"flow/process-groups/{parent_id}/?uiOnly=true")
+        self.logger.info(f"List of the child process groups for parent '{parent_id}' has this data inside it:'{data}'")
+        return data.get("processGroupFlow", {}).get("flow", {}).get("processGroups", [])
+
     def find_process_group_by_name(self, name: str, parent_id: str = "root") -> Optional[str]:
         """Find process group ID by name within a parent."""
         children = self.list_child_process_groups(parent_id)
-        
+
+        self.logger.info(f"============================================={children}")
+
         for pg in children:
             if pg["component"]["name"] == name:
                 return pg["id"]
@@ -83,8 +87,42 @@ class FlowManager(LoggerMixin):
                 continue  # Skip if cannot access child
         
         return None
-    
-    def create_process_group(self, parent_id: str, name: str, position_x: float = 100.0, 
+
+    def find_process_group_by_name_stop_integration(self, tenant_id: str, category_name: str, integration_name: str) -> List[str]:
+        """Find process group ID by name within a stop integration."""
+        tenant_pg_id = flow_manager.find_process_group_by_name(tenant_id, "root")
+
+        if not tenant_pg_id:
+            raise NiFiAPIError(f"Process group {tenant_id} not found")
+
+        category_in_pg_id = flow_manager.find_process_group_by_name(category_name, tenant_pg_id)
+
+        if not category_in_pg_id:
+            raise NiFiAPIError(f"Process group {category_name} not found inside {tenant_id}")
+
+
+        nifi_flow_name = INTEGRATION_NIFI_FLOW_NAMES.get(integration_name)
+
+        if not nifi_flow_name:
+            raise NiFiAPIError(f"Process group {category_name} not found inside {tenant_id}")
+
+        flow_name_pg_ids =[]
+        if isinstance(nifi_flow_name, List):
+            self.logger.info(f"We have multiple process groups for '{integration_name}' integration with '{category_name}'")
+            for flow_name in nifi_flow_name:
+                flow_name_pg_id = flow_manager.find_process_group_by_name(flow_name, category_in_pg_id)
+                if not flow_name_pg_id:
+                    raise NiFiAPIError(f"Process group {category_name} not found inside {tenant_id}")
+                flow_name_pg_ids.append(flow_name_pg_id)
+
+        else:
+            flow_name_pg_id = flow_manager.find_process_group_by_name(nifi_flow_name, category_in_pg_id)
+            flow_name_pg_ids.append(flow_name_pg_id)
+
+        return flow_name_pg_ids
+
+
+    def create_process_group(self, parent_id: str, name: str, position_x: float = 100.0,
                            position_y: float = 100.0, comments: str = "") -> Dict[str, Any]:
         """Create a new process group."""
         create_body = {

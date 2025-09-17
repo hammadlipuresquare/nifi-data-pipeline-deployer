@@ -175,3 +175,63 @@ def tenant_lock(tenant_id: str, timeout_seconds: int = 30):
         finally:
             logger.debug(f"Released tenant lock for {tenant_id}")
 
+
+@contextmanager
+def flow_lock(tenant_id: str, category: str, flow_name: str, timeout_seconds: int = 30):
+    """
+    Best-effort cross-process mutex for a specific tenant/category/flow.
+    Prevents concurrent imports/bindings for the same flow.
+    """
+    key = f"{tenant_id}__{category}__{flow_name}"
+    lock_dir = "/tmp"
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_path = os.path.join(lock_dir, f"orchestrator_flow_{key}.lock")
+
+    fd = None
+    start = time.time()
+    try:
+        try:
+            import fcntl  # type: ignore
+        except Exception:
+            fcntl = None  # type: ignore
+
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+        if fcntl is None:
+            while True:
+                try:
+                    os.link(lock_path, lock_path + ".hold")
+                    break
+                except Exception:
+                    if time.time() - start > timeout_seconds:
+                        logger.warning(f"Flow lock timeout (advisory) for {key}")
+                        break
+                    time.sleep(0.2)
+        else:
+            acquired = False
+            while not acquired:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                except BlockingIOError:
+                    if time.time() - start > timeout_seconds:
+                        logger.warning(f"Flow lock timeout for {key}")
+                        break
+                    time.sleep(0.2)
+        yield
+    finally:
+        try:
+            if fd is not None:
+                try:
+                    import fcntl  # type: ignore
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                os.close(fd)
+            try:
+                if os.path.exists(lock_path + ".hold"):
+                    os.unlink(lock_path + ".hold")
+            except Exception:
+                pass
+        finally:
+            pass
+

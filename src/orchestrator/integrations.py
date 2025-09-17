@@ -5,7 +5,6 @@ Hierarchical tenant-based organization with category groupings.
 
 import logging
 from typing import Dict, Any, Optional
-from dataclasses import dataclass
 from .nifi.flows import flow_manager
 from .nifi.params import parameter_manager
 from .nifi.controllers import controller_manager
@@ -19,25 +18,9 @@ from .parameters import (
     validate_parameters,
     get_supported_integrations
 )
+from .utils.integration_category import IntegrationCategory, INTEGRATION_CATEGORIES
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class IntegrationCategory:
-    """Defines integration categories for organizational grouping."""
-    ASSET_REGISTER = "Asset Register"
-    MISCONFIGURATION = "Misconfiguration"
-    VULNERABILITY = "Vulnerability"
-    COMPLIANCE = "Compliance"
-    CASE_MANAGEMENT = "Case Management"
-    IDENTITY_AND_ACCESS_REVIEW = "Identity & Access Review"
-
-    @classmethod
-    def get_all_categories(cls) -> list[str]:
-        """Get all available categories."""
-        return [cls.ASSET_REGISTER, cls.MISCONFIGURATION, cls.VULNERABILITY, cls.COMPLIANCE, cls.CASE_MANAGEMENT,
-                cls.IDENTITY_AND_ACCESS_REVIEW]
 
 
 def get_or_create_tenant_structure(tenant_id: str, category: str, integration_type: str,
@@ -81,18 +64,14 @@ def get_or_create_tenant_structure(tenant_id: str, category: str, integration_ty
             comments=f"Tenant process group for {tenant_id} - contains all integrations"
         )
 
-        # Step 2: Create or update smart parameter context for the tenant
-        pc_id = parameter_manager.ensure_tenant_parameter_context(tenant_id, integration_type, additional_params)
-
-        # Step 2.5: Bind parameter context to tenant process group and recursively to all children
-        logger.info(f"Binding parameter context {pc_id} to tenant process group {tenant_pg_id}")
-        parameter_manager.bind_parameter_context(tenant_pg_id, pc_id)
-
-        # Step 2.6: Recursively assign parameter context to all existing children (before deploying new ones)
-        logger.info(f"Recursively assigning parameter context to all existing children of tenant {tenant_id}")
-        recursive_results = parameter_manager.recursively_assign_parameter_context(
-            tenant_pg_id, pc_id, stop_components_if_needed=False
+        # Step 2: Create or update smart parameter context for the tenant (values only)
+        pc_id = parameter_manager.ensure_tenant_parameter_context(
+            tenant_id, integration_type, additional_params
         )
+
+        # IMPORTANT: Do NOT bind at tenant level or recurse here.
+        # Binding is done only on the imported/updated flow root PG.
+        recursive_results = {"total_processed": 0}
 
         # Step 3: Create or get ONLY the specific category process group needed (smart duplicate prevention + smart positioning)
         category_pg_name = f"{category}"
@@ -109,22 +88,15 @@ def get_or_create_tenant_structure(tenant_id: str, category: str, integration_ty
             comments=f"{category} integrations for tenant {tenant_id}"
         )
 
-    # Log summary after releasing the lock
+    # Log summary after releasing the lock (noop in scoped-binding mode)
     if recursive_results.get("total_processed", 0) > 0:
         assigned = recursive_results.get('total_assigned', 0)
         skipped = recursive_results.get('total_skipped', 0)
         errors = recursive_results.get('total_errors', 0)
-
-        logger.info(f"📋 Recursive assignment summary: "
-                    f"Processed: {recursive_results.get('total_processed', 0)}, "
-                    f"Assigned: {assigned}, Skipped: {skipped}, Errors: {errors}")
-
-        if errors > 0:
-            logger.warning(f"⚠️  {errors} process groups could not be updated (likely due to running components)")
-            logger.info(
-                "💡 This is normal for running integrations - new deployments will inherit parameter context correctly")
-    else:
-        logger.info("📋 No existing children found - parameter context will be inherited by new children")
+        logger.info(
+            f"📋 Recursive assignment summary: Processed: {recursive_results.get('total_processed', 0)}, "
+            f"Assigned: {assigned}, Skipped: {skipped}, Errors: {errors}"
+        )
 
     return {
         "tenant_pg_id": tenant_pg_id,
@@ -175,40 +147,17 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
             logger.warning(
                 f"Integration '{integration_name}' already exists in category '{category}' for tenant '{tenant_id}'")
 
-            # CRITICAL FIX: Even for existing integrations, ensure parameter context is properly assigned
+            # Scoped binding only if root PG not already bound to desired PC
             pc_id = tenant_structure["parameter_context_id"]
-            if pc_id and pc_id not in ["unsupported-parameter-context", "creation-failed-pc-id",
-                                       "exists-but-unlookupable-pc-id"]:
-                logger.info(
-                    f"🔧 Ensuring parameter context is properly assigned to existing integration and all its children")
-                pc_assignment_result = parameter_manager.ensure_imported_flow_parameter_context(
-                    existing_integration_pg, pc_id
-                )
-
-                if pc_assignment_result.get("total_assigned", 0) > 0:
-                    logger.info(
-                        f"📋 Parameter context assignment for existing integration: {pc_assignment_result.get('total_assigned')} process groups updated")
-                else:
-                    logger.warning(f"⚠️  Parameter context assignment had limited success for existing integration")
-            elif pc_id == "creation-failed-pc-id":
-                # Apply the same fix logic for existing integrations
-                logger.info(
-                    f"🔍 Existing integration has creation-failed-pc-id - attempting parameter context lookup and assignment")
-                pc_assignment_result = parameter_manager.ensure_imported_flow_parameter_context(
-                    existing_integration_pg, pc_id
-                )
-
-                # Update the pc_id if we found an existing one
-                if pc_assignment_result.get("parameter_context_id") and pc_assignment_result[
-                    "parameter_context_id"] != "creation-failed-pc-id":
-                    pc_id = pc_assignment_result["parameter_context_id"]
-                    logger.info(f"✅ Updated parameter context ID for existing integration: {pc_id}")
-            elif pc_id == "exists-but-unlookupable-pc-id":
-                logger.info(
-                    f"ℹ️  Parameter context exists but cannot be assigned due to NiFi API limitations (exists-but-unlookupable-pc-id)")
-                logger.info(f"   This is expected behavior for NiFi versions with partial parameter context support")
+            if pc_id in ["unsupported-parameter-context", "creation-failed-pc-id", "exists-but-unlookupable-pc-id"]:
+                logger.info("Parameter context not supported/available; skipping bind")
             else:
-                logger.info(f"ℹ️  Parameter context not supported or available for existing integration")
+                current_pc_id = parameter_manager.get_process_group_bound_pc_id(existing_integration_pg)
+                if current_pc_id == pc_id:
+                    logger.info("Existing integration already bound to desired PC; no bind needed")
+                else:
+                    logger.info("Binding desired PC to existing integration root PG (scoped)")
+                    parameter_manager.bind_parameter_context(existing_integration_pg, pc_id)
 
             result = {
                 "tenant_pg_id": tenant_structure["tenant_pg_id"],
@@ -234,22 +183,16 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
             tenant_id=f"{tenant_id}-{integration_name}"
         )
 
-        # Step 6: Ensure parameter context is properly applied to the imported flow and all its children
-        logger.info(f"Ensuring parameter context is applied to imported flow and all its children")
-        pc_assignment_result = parameter_manager.ensure_imported_flow_parameter_context(
-            new_pg["id"], tenant_structure["parameter_context_id"]
-        )
+        # Step 6: Scoped PC binding only if the root PG is not already bound to the same PC
+        root_pg_id = new_pg["id"]
+        desired_pc_id = tenant_structure["parameter_context_id"]
+        current_pc_id = parameter_manager.get_process_group_bound_pc_id(root_pg_id)
 
-        if pc_assignment_result.get("total_assigned", 0) > 0:
-            logger.info(
-                f"📋 Parameter context assignment: {pc_assignment_result.get('total_assigned')} process groups updated")
+        if current_pc_id == desired_pc_id:
+            logger.info("Root process group already bound to the desired parameter context; skipping bind")
         else:
-            logger.warning(
-                f"⚠️  Parameter context assignment had limited success - this may be due to running components")
-
-        # Step 6.5: Also bind using the standard method as backup
-        logger.info(f"Applying standard parameter context binding as backup")
-        parameter_manager.bind_parameter_context(new_pg["id"], tenant_structure["parameter_context_id"])
+            logger.info("Binding parameter context to root process group (scoped)")
+            parameter_manager.bind_parameter_context(root_pg_id, desired_pc_id)
 
         # Step 7: Configure Kafka services if needed
         logger.info(f"Configuring Kafka controller services")
@@ -317,14 +260,14 @@ def deploy_jumpcloud_pipeline(tenant_id: str, version: str = "latest") -> Dict[s
             flow_name="jumpcloud-events",
             version=version
         )
-        
+
         # Merge results with primary taking precedence
         primary_result["secondary_integration"] = {
             "name": "JumpCloud Event Logs",
             "status": secondary_result.get("status", "unknown"),
             "integration_pg_id": secondary_result.get("integration_pg_id")
         }
-        
+
     except Exception as e:
         logger.warning(f"Failed to deploy secondary JumpCloud Event Logs integration: {e}")
         primary_result["secondary_integration"] = {
@@ -332,7 +275,7 @@ def deploy_jumpcloud_pipeline(tenant_id: str, version: str = "latest") -> Dict[s
             "status": "failed",
             "error": str(e)
         }
-    
+
     return primary_result
 
 
@@ -373,16 +316,6 @@ INTEGRATION_REGISTRY = {
     "jumpcloud": deploy_jumpcloud_pipeline,
     "custom": deploy_custom_integration,
     "aws": deploy_aws_asset_registry_pipeline,
-}
-
-# Category-based integration mapping
-CATEGORY_INTEGRATIONS = {
-    IntegrationCategory.ASSET_REGISTER: {
-        "aws": deploy_aws_asset_registry_pipeline
-    },
-    IntegrationCategory.IDENTITY_AND_ACCESS_REVIEW: {
-        "jumpcloud": deploy_jumpcloud_pipeline
-    }
 }
 
 
@@ -440,14 +373,6 @@ def list_all_integration_info() -> Dict[str, Dict[str, Any]]:
         integration_type: get_integration_parameter_info(integration_type)
         for integration_type in get_supported_integrations()
     }
-
-
-def get_integrations_by_category() -> Dict[str, list[str]]:
-    """Get integrations organized by category."""
-    result = {}
-    for category, integrations in CATEGORY_INTEGRATIONS.items():
-        result[category] = list(integrations.keys())
-    return result
 
 
 def ensure_tenant_parameter_context_inheritance(tenant_id: str, stop_running_components: bool = False) -> Dict[
@@ -620,3 +545,24 @@ def get_integration_secrets_from_vault(tenant_id: str, integration_name: str) ->
     secrets_values = HashiCorpVault().get_secret(f"{tenant_id}/{integration_name}/{secret_lists[0]}")
 
     return secrets_values
+
+
+def update_integration_secrets(tenant_id: str, integration_name: str) -> None:
+    secret_values = get_integration_secrets_from_vault(tenant_id, integration_name.upper())
+
+    parameter_manager.ensure_tenant_parameter_context(tenant_id=tenant_id, integration_type=integration_name,
+                                                      additional_params=secret_values)
+
+    logger.info(f"Updating secrets for integration {integration_name}")
+
+
+def stop_integration(tenant_id: str, integration_name: str) -> None:
+    category_name = INTEGRATION_CATEGORIES.get(integration_name)
+    if not category_name: raise ValueError(f"No category mapping found for integration '{integration_name}'")
+
+    integration_pg_ids = flow_manager.find_process_group_by_name_stop_integration(tenant_id, category_name,
+                                                                                  integration_name)
+
+    for integration_pg_id in integration_pg_ids: flow_manager.stop_process_group(integration_pg_id)
+
+    logger.info(f"Stopped integration '{integration_name}' for tenant '{tenant_id}' in category '{category_name}'")

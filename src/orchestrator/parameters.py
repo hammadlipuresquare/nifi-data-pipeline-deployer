@@ -35,8 +35,6 @@ INTEGRATION_PARAMETERS = {
         }
     }
 }
-
-
 # Helper functions
 def get_required_parameters(integration_type: str) -> Dict[str, Any]:
     """Get required parameters for an integration."""
