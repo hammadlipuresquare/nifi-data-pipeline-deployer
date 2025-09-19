@@ -15,6 +15,7 @@ from .utils.idempotency import tenant_lock
 from .utils.utils import _json_or_none
 from .vault import HashiCorpVault, VaultConnectionError
 from .utils.redis_client import RedisClient
+from .utils.redis_keys import tenant_hash_key, tenant_categories_key, tenant_integration_hash_key
 from .parameters import (
     INTEGRATION_PARAMETERS,
     get_required_parameters,
@@ -170,9 +171,9 @@ def get_or_create_tenant_structure(
     ensure requested category PG, and if tenant is new recursively assign
     the PC to all child PGs.
 
-    Redis keys:
-      - hset  "nifi:tenant"  field={tenant_id} -> {"tenant_pg_id": "...", "pc_id": "..."}
-      - get/set "nifi:categories:tenant:{tenant_id}" -> {"<Category String>": "<pgId>", ...}
+    Redis keys (centralized):
+      - hset  tenant_hash_key()  field={tenant_id} -> {"tenant_pg_id": "...", "pc_id": "..."}
+      - get/set tenant_categories_key(tenant_id) -> {"<Category String>": "<pgId>", ...}
     """
 
     logger.info(
@@ -183,7 +184,7 @@ def get_or_create_tenant_structure(
         # ---------------------------
         # 1) Read tenant cache
         # ---------------------------
-        tenant_doc_raw = RedisClient.get_instance().hget(key="nifi:tenant", hash=tenant_id)
+        tenant_doc_raw = RedisClient.get_instance().hget(key=tenant_hash_key(), hash=tenant_id)
         tenant_existed = bool(tenant_doc_raw)
         tenant_pg_id = None
         pc_id = None
@@ -227,13 +228,13 @@ def get_or_create_tenant_structure(
             )
 
         # Persist tenant cache
-        RedisClient.get_instance().hset(key="nifi:tenant", hash=tenant_id,
+        RedisClient.get_instance().hset(key=tenant_hash_key(), hash=tenant_id,
                                         mapping={"tenant_pg_id": tenant_pg_id, "pc_id": pc_id}, )
 
         # ----------------------------------------------------
         # 4) Ensure ONLY the requested Category process group
         # ----------------------------------------------------
-        cat_key = f"nifi:categories:tenant:{tenant_id}"
+        cat_key = tenant_categories_key(tenant_id)
         cat_cache_raw = RedisClient.get_instance().get(key=cat_key)
         try:
             cat_cache = json.loads(cat_cache_raw) if cat_cache_raw else {}
@@ -313,7 +314,7 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
         integration_pg_name = f"{integration_name}"
 
         doc = RedisClient.get_instance().hget(
-            key=f"nifi:tenant:{tenant_id}:integration:{integration_type}",
+            key=tenant_integration_hash_key(tenant_id, integration_type),
             hash=integration_pg_name)
         if doc is not None:
             doc = json.loads(doc)
@@ -322,7 +323,7 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
                 logger.info(f"Found existing tenant process group: {integration_pg_name} stopped just need to start it")
                 flow_manager.start_process_group(doc.get("integration_pg_id"))
                 RedisClient.get_instance().hset(
-                    key=f"nifi:tenant:{tenant_id}:integration:{integration_type}",
+                    key=tenant_integration_hash_key(tenant_id, integration_type),
                     hash=integration_pg_name,
                     mapping={"status": FlowStatus.STARTED.value, **doc})
             else:
@@ -345,6 +346,13 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
                 logger.info("Binding desired PC to existing integration root PG (scoped)")
                 parameter_manager.bind_parameter_context(existing_integration_pg, pc_id)
 
+            # Ensure the existing integration is running (start if stopped)
+            try:
+                logger.info("Starting existing integration process group (id=%s)", existing_integration_pg)
+                flow_manager.start_process_group(existing_integration_pg)
+            except Exception as e:
+                logger.warning("Failed to start existing integration PG %s: %s", existing_integration_pg, e)
+
             result = {
                 "tenant_pg_id": tenant_structure["tenant_pg_id"],
                 "category_pg_id": category_pg_id,
@@ -358,8 +366,8 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
             logger.info(
                 f"Integration already deployed for {tenant_id}/{category}/{integration_name} with parameter context review completed")
 
-            RedisClient.get_instance().hset(key=f"nifi:tenant:{tenant_id}:integration:{integration_type}",
-                                            hash=flow_name,
+            RedisClient.get_instance().hset(key=tenant_integration_hash_key(tenant_id, integration_type),
+                                            hash=integration_pg_name,
                                             mapping=result)
             return None
 
@@ -421,7 +429,7 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
         }
 
         RedisClient.get_instance().hset(
-            key=f"nifi:tenant:{tenant_id}:integration:{integration_type}", hash=integration_pg_name,
+            key=tenant_integration_hash_key(tenant_id, integration_type), hash=integration_pg_name,
             mapping=result)
         logger.info(f"Successfully deployed {tenant_id}/{category}/{integration_name}")
         return None
@@ -653,7 +661,7 @@ def get_integration_secrets_from_vault(tenant_id: str, integration_name: str) ->
 def update_integration_secrets(tenant_id: str, integration_name: str) -> None:
     secret_values = get_integration_secrets_from_vault(tenant_id, integration_name.upper())
 
-    doc = RedisClient.get_instance().hget(key=f"nifi:tenant", hash=tenant_id)
+    doc = RedisClient.get_instance().hget(key=tenant_hash_key(), hash=tenant_id)
 
     if doc is not None:
         doc = json.loads(doc)
@@ -684,8 +692,8 @@ def stop_integration(tenant_id: str, integration_name: str) -> None:
 
     tenant_pc_id = parameter_manager.find_parameter_context_by_name(f"{tenant_id}-context")
 
-    # 1) Load cache: HGETALL nifi:tenant:{tenant_id}:integration:{integration_name}
-    redis_key = f"nifi:tenant:{tenant_id}:integration:{integration_name}"
+    # 1) Load cache: HGETALL of centralized tenant_integration_hash_key
+    redis_key = tenant_integration_hash_key(tenant_id, integration_name)
     raw_map: Optional[Dict[str, str]] = RedisClient.get_instance().hgetall(key=redis_key)
 
     pg_ids: List[str] = []

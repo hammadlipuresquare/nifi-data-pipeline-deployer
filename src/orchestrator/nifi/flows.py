@@ -11,6 +11,7 @@ from ..utils.idempotency import get_or_create
 from ..logging import LoggerMixin
 from ..utils.integration_category import INTEGRATION_NIFI_FLOW_NAMES
 from ..utils.redis_client import RedisClient
+from ..utils.redis_keys import tenant_hash_key, tenant_categories_key
 from ..utils.utils import _json_or_none
 
 
@@ -92,7 +93,7 @@ class FlowManager(LoggerMixin):
     def find_process_group_by_name_stop_integration(self, tenant_id: str, integration_name: str, tenant_pc_id: str) -> \
             List[str]:
         """Find process group ID by name within a stop integration."""
-        doc = RedisClient.get_instance().hget(key="nifi:tenant", hash=tenant_id)
+        doc = RedisClient.get_instance().hget(key=tenant_hash_key(), hash=tenant_id)
         if doc is None:
             tenant_pg_id = self.get_tenant_pg_id(tenant_id, tenant_pc_id)
         else:
@@ -110,7 +111,7 @@ class FlowManager(LoggerMixin):
             nifi_flow = [nifi_flow]
         self.logger.info(f"We have multiple process groups for '{integration_name}' integration with'")
 
-        cached_categories = RedisClient.get_instance().get(key=f"nifi:category:tenant:{tenant_id}")
+        cached_categories = RedisClient.get_instance().get(key=tenant_categories_key(tenant_id))
         if cached_categories is not None:
             cached_categories = json.loads(cached_categories)
         else:
@@ -495,8 +496,11 @@ class FlowManager(LoggerMixin):
         tenant_pg_id = flow_manager.find_process_group_by_name(tenant_id, "root")
         if not tenant_pg_id:
             raise NiFiAPIError(f"Process group {tenant_id} not found")
-        RedisClient.get_instance().hset(key="nifi:tenant", hash=tenant_id,
-                                        mapping={"tenant_pg_id": tenant_pg_id, "pc_id": tenant_pc_id})
+        RedisClient.get_instance().hset(
+            key=tenant_hash_key(),
+            hash=tenant_id,
+            mapping={"tenant_pg_id": tenant_pg_id, "pc_id": tenant_pc_id}
+        )
 
         return tenant_pg_id
 
@@ -510,7 +514,7 @@ class FlowManager(LoggerMixin):
         # merge with cache if provided
         payload = {**(category_cache or {}), category_name: category_in_pg_id}
 
-        RedisClient.get_instance().set(key=f"nifi:categories:tenant:{tenant_id}", value=json.dumps(payload))
+        RedisClient.get_instance().set(key=tenant_categories_key(tenant_id), value=json.dumps(payload))
 
         return category_in_pg_id
 

@@ -8,6 +8,10 @@ from pydantic_settings import BaseSettings
 class OrchestratorConfig(BaseSettings):
     """Main configuration for the orchestrator service."""
     
+    # Orchestrator namespacing
+    orchestrator_env: str = Field(default="dev", env="ORCHESTRATOR_ENV")
+    orchestrator_cluster: str = Field(default="local", env="ORCHESTRATOR_CLUSTER")
+
     # NiFi Configuration
     nifi_api_url: str = Field(default="https://localhost:8443/nifi-api", env="NIFI_API_URL")
     nifi_registry_url: str = Field(default="http://localhost:18080/nifi-registry-api", env="NIFI_REGISTRY_URL")
