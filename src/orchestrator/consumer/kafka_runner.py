@@ -6,15 +6,7 @@ from typing import Dict, Any, Optional, Tuple
 from confluent_kafka import Consumer, Producer, KafkaError
 from confluent_kafka.admin import AdminClient, NewTopic
 from ..config import config
-from ..integrations import (
-    get_available_integrations,
-    deploy_aws_asset_registry_pipeline,
-    deploy_jumpcloud_pipeline,
-    update_integration_secrets, stop_integration
-)
-from ..nifi.params import parameter_manager
-from ..nifi.flows import flow_manager
-from ..utils.integration_category import INTEGRATION_CATEGORIES
+from ..integrations import (update_integration_secrets, stop_integration, handle_deployment)
 from ..exceptions import OrchestratorError
 from ..logging import LoggerMixin
 
@@ -190,42 +182,20 @@ class KafkaWorker(LoggerMixin):
         try:
             tenant_id, integration_name = self._extract_and_validate_tenant_id_and_integration(raw_message)
 
-            version = "latest"
-
             self.logger.info(f"🚀 Processing {integration_name} deployment for tenant: {tenant_id}")
 
-            # Switch case logic for different integrations
-            match integration_name:
-                case "jumpcloud":
-                    result = deploy_jumpcloud_pipeline(tenant_id=tenant_id, version=version)
-                case "aws":
-                    result = deploy_aws_asset_registry_pipeline(tenant_id=tenant_id, version=version)
-                case _:
-                    available = ", ".join(get_available_integrations())
-                    raise ValueError(f"Unsupported integration '{integration_name}'. Available: {available}")
+            handle_deployment(tenant_id, integration_name)
 
-            # Send success response
-            success_response = {
-                "success": True,
-                "tenant_id": tenant_id,
-                "integration": integration_name,
-                "timestamp": time.time(),
-                "result": result,
-                "error": None,
-                "processing_time_seconds": time.time() - start_time
-            }
-
-            self._send_response(success_response)
-            self.logger.info(f"✅ Successfully deployed {integration_name} pipeline for {tenant_id}")
+            self.logger.info(f"Successfully deployed {integration_name} pipeline for {tenant_id}")
             return True
 
         except ValueError as e:
             # Validation errors - don't retry
-            self.logger.error(f"❌ Validation error: {e}")
+            self.logger.error(f"Validation error: {e}")
             return False
 
         except Exception as e:
-            self.logger.error(f"❌ Deployment failed: {e}")
+            self.logger.error(f"Deployment failed: {e}")
 
             # Send error response
             error_response = {
@@ -290,13 +260,7 @@ class KafkaWorker(LoggerMixin):
             self.logger.error(f"Failed to send response: {e}")
 
     def _print_startup_info(self) -> None:
-        """Print startup information."""
         self.logger.info("Kafka worker ready for messages")
-
-        # Show available integrations
-        integrations = get_available_integrations()
-        self.logger.info(f"Available integrations: {integrations}")
-        self.logger.info("Adding new integrations is easy - just add a function to integrations.py!")
 
     def _cleanup(self) -> None:
         """Clean up Kafka clients."""

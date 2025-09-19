@@ -19,8 +19,24 @@ INTEGRATION_CATEGORIES = {
 }
 
 INTEGRATION_NIFI_FLOW_NAMES = {
-    "jumpcloud":["JumpCloud Asset Discovery", "JumpCloud Event Logs"],
-    "aws":"AWS Asset Registry",
+    "jumpcloud": [
+        {
+            "name": "JumpCloud_Asset_Discovery",
+            "category": IntegrationCategory.IDENTITY_AND_ACCESS_REVIEW,
+            "registry_flow_name":"jumpcloud-asset"
+        },
+        {
+            "name": "JumpCloud_Event_Logs",
+            "category": IntegrationCategory.IDENTITY_AND_ACCESS_REVIEW,
+            "registry_flow_name":"jumpcloud-events"
+        }
+    ],
+    "aws":
+        {
+            "name": "AWS_Asset_Registry",
+            "category": IntegrationCategory.ASSET_REGISTER,
+            "registry_flow_name":"aws"
+        },
 }
 
 __all__ = [
@@ -28,5 +44,3 @@ __all__ = [
     "INTEGRATION_CATEGORIES",
     "INTEGRATION_NIFI_FLOW_NAMES"
 ]
-
-

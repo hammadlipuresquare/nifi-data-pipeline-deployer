@@ -5,7 +5,6 @@ import signal
 from typing import Optional
 from .config import config
 from .logging import setup_logging, get_logger
-from .integrations import get_available_integrations
 from .consumer.kafka_runner import kafka_worker
 from .exceptions import OrchestratorError
 
@@ -46,9 +45,9 @@ class OrchestratorApp:
             self.logger.info(f"Configuration loaded: NiFi={config.nifi_api_url}, Kafka={config.kafka_bootstrap_servers}")
             
             # Check available integrations
-            integrations = get_available_integrations()
-            self.logger.info(f"Available integrations: {integrations}")
-            
+            # integrations = get_available_integrations()
+            # self.logger.info(f"Available integrations: {integrations}")
+            #
             # Validate configuration
             self._validate_configuration()
             
@@ -113,17 +112,7 @@ class OrchestratorApp:
             self.logger.info("✅ Kafka consumer: HEALTHY")
         else:
             self.logger.warning("⚠️  Kafka consumer: NOT INITIALIZED")
-        
-        # Check available integrations
-        try:
-            integrations = get_available_integrations()
-            if integrations:
-                self.logger.info(f"✅ Integrations available: {len(integrations)} types")
-            else:
-                self.logger.warning("⚠️  No integrations available")
-        except Exception as e:
-            self.logger.warning(f"⚠️  Integration check failed: {e}")
-        
+
         self.logger.info("Health checks completed")
     
     def run(self) -> None:

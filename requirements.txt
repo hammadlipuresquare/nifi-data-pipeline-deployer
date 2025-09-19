@@ -21,3 +21,5 @@ tenacity>=8.2.2
 
 # HashiCorp Vault integration for secure secrets management
 hvac>=2.0.0
+
+redis>= 5.0.0

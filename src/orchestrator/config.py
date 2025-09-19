@@ -29,6 +29,13 @@ class OrchestratorConfig(BaseSettings):
     kafka_max_poll_interval_ms: int = Field(default=300000, env="KAFKA_MAX_POLL_INTERVAL_MS")
     backoff_base_ms: int = Field(default=500, env="KAFKA_BACKOFF_BASE_MS")
     backoff_max_ms: int = Field(default=60000, env="KAFKA_BACKOFF_MAX_MS")
+
+    # Redis Configuration
+    redis_host: str = Field(default="localhost", env="REDIS_HOST")
+    redis_port: int = Field(default=6379, env="REDIS_PORT")
+    redis_db: int = Field(default=0, env="REDIS_DB")
+    redis_password: Optional[str] = Field(default=None, env="REDIS_PASSWORD")
+    redis_ssl: bool = Field(default=False, env="REDIS_SSL")
     
     # NiFi Pipeline Kafka Configuration (for deployed pipelines)
     nifi_kafka_bootstrap_servers: str = Field(default="kafka.apache:9092", env="NIFI_KAFKA_BOOTSTRAP_SERVERS")

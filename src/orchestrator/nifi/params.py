@@ -7,6 +7,7 @@ from .flows import flow_manager
 from ..exceptions import NiFiAPIError
 from ..utils.idempotency import get_or_create
 from ..logging import LoggerMixin
+from ..parameters import INTEGRATION_PARAMETERS
 
 
 @dataclass
@@ -427,7 +428,7 @@ class ParameterManager(LoggerMixin):
         def _mask(v: Dict[str, Any]) -> str:
             if v.get("parameter", {}).get("sensitive", False):
                 return f"{v['parameter']['name']}=<redacted>"
-            return f"{v['parameter']['name']}={v['parameter'].get('value','')}"
+            return f"{v['parameter']['name']}={v['parameter'].get('value', '')}"
 
         if dry_run:
             self.logger.info("[DRY-RUN] Would upsert parameters: " + ", ".join(_mask(x) for x in to_change))
@@ -463,26 +464,26 @@ class ParameterManager(LoggerMixin):
         Returns:
             Parameter context ID (or fallback ID if not supported)
         """
-        # Check if parameter contexts are supported
-        try:
-            # Quick test to see if endpoint exists
-            self.list_parameter_contexts()
-            parameter_contexts_supported = True
-        except Exception as e:
-            if "405" in str(e) or "Method Not Allowed" in str(e):
-                parameter_contexts_supported = False
-                self.logger.warning(f"Parameter contexts not supported in this NiFi version, using fallback")
-            else:
-                parameter_contexts_supported = True
-
-        if not parameter_contexts_supported:
-            # Return a fallback ID for unsupported versions
-            fallback_id = "unsupported-parameter-context"
-            self.logger.info(f"Using fallback parameter context ID: {fallback_id}")
-            return fallback_id
+        # # Check if parameter contexts are supported
+        # try:
+        #     # Quick test to see if endpoint exists
+        #     self.list_parameter_contexts()
+        #     parameter_contexts_supported = True
+        # except Exception as e:
+        #     if "405" in str(e) or "Method Not Allowed" in str(e):
+        #         parameter_contexts_supported = False
+        #         self.logger.warning(f"Parameter contexts not supported in this NiFi version, using fallback")
+        #     else:
+        #         parameter_contexts_supported = True
+        #
+        # if not parameter_contexts_supported:
+        #     # Return a fallback ID for unsupported versions
+        #     fallback_id = "unsupported-parameter-context"
+        #     self.logger.info(f"Using fallback parameter context ID: {fallback_id}")
+        #     return fallback_id
 
         # Import here to avoid circular imports
-        from ..integrations import INTEGRATION_PARAMETERS
+
 
         # Get parameter specifications for this integration type
         if integration_type not in INTEGRATION_PARAMETERS:
@@ -514,10 +515,6 @@ class ParameterManager(LoggerMixin):
             else:
                 desired = self._compute_desired_param_entries(parameter_specs, integration_type,
                                                               integration_params, tenant_id)
-                if dry_run:
-                    self.logger.info(f"[DRY-RUN] Would create parameter context {pc_name} with params: "
-                                     + ", ".join([(''+(''+p['parameter']['name'])+'=<redacted>' if p['parameter'].get('sensitive') else p['parameter']['name']+'='+str(p['parameter'].get('value',''))) for p in desired]))
-                    return pc_name
                 pc = self.create_parameter_context(
                     name=pc_name,
                     description=f"Smart parameter context for tenant: {tenant_id}",
@@ -527,6 +524,27 @@ class ParameterManager(LoggerMixin):
         except Exception as e:
             self.logger.error(f"Failed to ensure/update parameter context {pc_name}: {e}")
             return "unsupported-parameter-context"
+
+    def update_existing_parameter_context(self, existing_pc_id: str, integration_type: str, tenant_id: str,
+                                          additional_params: Optional[Dict[str, Any]] = None, ):
+
+
+        # Get parameter specifications for this integration type
+        if integration_type not in INTEGRATION_PARAMETERS:
+            self.logger.warning(f"No parameter specs found for integration: {integration_type}")
+            # Fallback to basic parameters
+            parameter_specs = {
+                "TENANT_ID": {"description": "Tenant identifier", "sensitive": False, "source": "tenant_id"}
+            }
+        else:
+            parameter_specs = INTEGRATION_PARAMETERS[integration_type]
+
+        # Prepare integration parameters
+        integration_params = {"tenant_id": tenant_id}
+        if additional_params: integration_params.update(additional_params)
+
+        self._upsert_parameters_to_context(existing_pc_id, parameter_specs, integration_type, integration_params,
+                                           tenant_id, dry_run=False)
 
     def bind_parameter_context(self, pg_id: str, pc_id: str) -> Dict[str, Any]:
         """Bind parameter context to process group using proper NiFi API structure."""
