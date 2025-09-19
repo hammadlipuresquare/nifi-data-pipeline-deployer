@@ -213,7 +213,7 @@ def get_or_create_tenant_structure(
         # 3) Upsert Tenant Parameter Context values
         # ------------------------------------------
         if pc_id:
-            pc_id = parameter_manager.update_existing_parameter_context(
+            parameter_manager.update_existing_parameter_context(
                 existing_pc_id=pc_id,
                 additional_params=additional_params or {},
                 tenant_id=tenant_id,

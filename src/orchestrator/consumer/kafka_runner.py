@@ -182,7 +182,7 @@ class KafkaWorker(LoggerMixin):
         try:
             tenant_id, integration_name = self._extract_and_validate_tenant_id_and_integration(raw_message)
 
-            self.logger.info(f"🚀 Processing {integration_name} deployment for tenant: {tenant_id}")
+            self.logger.info(f"Processing {integration_name} deployment for tenant: {tenant_id}")
 
             handle_deployment(tenant_id, integration_name)
 
