@@ -7,7 +7,7 @@ from .flows import flow_manager
 from ..exceptions import NiFiAPIError
 from ..utils.idempotency import get_or_create
 from ..logging import LoggerMixin
-from ..parameters import INTEGRATION_PARAMETERS
+from src.orchestrator.utils.parameters import INTEGRATION_PARAMETERS
 
 
 @dataclass

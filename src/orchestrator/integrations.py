@@ -4,7 +4,6 @@ Hierarchical tenant-based organization with category groupings.
 """
 import json
 import logging
-from tkinter import Listbox
 from typing import Dict, Any, Optional, List
 from .nifi.flows import flow_manager
 from .nifi.params import parameter_manager
@@ -12,18 +11,17 @@ from .nifi.controllers import controller_manager
 from .nifi.registry import registry_manager
 from .utils.enums import FlowStatus
 from .utils.idempotency import tenant_lock
-from .utils.utils import _json_or_none
-from .vault import HashiCorpVault, VaultConnectionError
+from .vault import HashiCorpVault
 from .utils.redis_client import RedisClient
 from .utils.redis_keys import tenant_hash_key, tenant_categories_key, tenant_integration_hash_key
-from .parameters import (
+from src.orchestrator.utils.parameters import (
     INTEGRATION_PARAMETERS,
     get_required_parameters,
     get_sensitive_parameters,
     validate_parameters,
     get_supported_integrations
 )
-from .utils.integration_category import IntegrationCategory, INTEGRATION_CATEGORIES, INTEGRATION_NIFI_FLOW_NAMES
+from .utils.integration_category import INTEGRATION_NIFI_FLOW_NAMES
 
 logger = logging.getLogger(__name__)
 
@@ -647,15 +645,25 @@ def get_nifi_version() -> str:
 
 
 def get_integration_secrets_from_vault(tenant_id: str, integration_name: str) -> Any:
-    secret_lists = HashiCorpVault().list_secrets(f"{tenant_id}/{integration_name}")
 
-    logger.debug(f"List returned from vault{secret_lists}")
+    required_params = INTEGRATION_PARAMETERS.get(integration_name.lower())
+    fetch_secret = False
+    for key, value in required_params.items():
+        if key != 'TENANT_ID':
+            fetch_secret = True
 
-    if not len(secret_lists): raise Exception("JumpCloud Secret lists not found")
+    if fetch_secret:
+        secret_lists = HashiCorpVault().list_secrets(f"{tenant_id}/{integration_name}")
 
-    secrets_values = HashiCorpVault().get_secret(f"{tenant_id}/{integration_name}/{secret_lists[0]}")
+        logger.debug(f"List returned from vault{secret_lists}")
 
-    return secrets_values
+        if not len(secret_lists): raise Exception("JumpCloud Secret lists not found")
+
+        secrets_values = HashiCorpVault().get_secret(f"{tenant_id}/{integration_name}/{secret_lists[0]}")
+
+        return secrets_values
+    else:
+        return {}
 
 
 def update_integration_secrets(tenant_id: str, integration_name: str) -> None:

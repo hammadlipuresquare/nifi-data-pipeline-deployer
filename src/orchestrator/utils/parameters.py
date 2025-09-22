@@ -2,7 +2,6 @@
 
 from typing import Dict, Any, Optional
 
-
 # Simple, clean parameter definitions
 INTEGRATION_PARAMETERS = {
     "jumpcloud": {
@@ -33,8 +32,32 @@ INTEGRATION_PARAMETERS = {
             "sensitive": True,
             "source": "secret_access_key"
         }
+    },
+    "wazuh_api": {
+        "TENANT_ID": {
+            "description": "Tenant identifier for multi-tenancy",
+            "sensitive": False,
+            "source": "tenant_id"
+        },
+        "WAZUH_USER": {
+            "description": "WAZUH user name for authentication",
+            "sensitive": False,
+            "source": "username"
+        },
+        "WAZUH_PASS": {
+            "description": "WAZUH password for authentication",
+            "sensitive": True,
+            "source": "password"
+        },
+        "WAZUH_URL": {
+            "description": "WAZUH URL for authentication",
+            "sensitive": False,
+            "source": "url"
+        }
     }
 }
+
+
 # Helper functions
 def get_required_parameters(integration_type: str) -> Dict[str, Any]:
     """Get required parameters for an integration."""
@@ -55,15 +78,15 @@ def validate_parameters(integration_type: str, provided_params: Dict[str, Any]) 
             "valid": False,
             "errors": [f"Unknown integration type: {integration_type}"]
         }
-    
+
     required_params = get_required_parameters(integration_type)
     missing = []
-    
+
     for param_name, param_config in required_params.items():
         source_key = param_config["source"]
         if source_key not in provided_params:
             missing.append(f"{param_name} (from: {source_key})")
-    
+
     return {
         "valid": len(missing) == 0,
         "missing_required": missing,
@@ -80,7 +103,7 @@ def get_supported_integrations() -> list[str]:
 __all__ = [
     "INTEGRATION_PARAMETERS",
     "get_required_parameters",
-    "get_sensitive_parameters", 
+    "get_sensitive_parameters",
     "validate_parameters",
     "get_supported_integrations"
 ]
