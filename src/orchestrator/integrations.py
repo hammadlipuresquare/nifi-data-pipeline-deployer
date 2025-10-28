@@ -26,144 +26,9 @@ from .utils.integration_category import INTEGRATION_NIFI_FLOW_NAMES
 logger = logging.getLogger(__name__)
 
 
-# def get_or_create_tenant_structure(tenant_id: str, category: str, integration_type: str,
-#                                    additional_params: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-#     """
-#     Create or get existing tenant structure with smart parameter context.
-#     Only creates the specific category needed for the current integration.
-#
-#     Structure:
-#     Root
-#     └── {tenant_id} (Tenant Process Group)
-#         ├── {tenant_id}-context (Smart Parameter Context - shared by all integrations)
-#         └── {category} (Category Process Group) - only creates what's needed
-#
-#     Args:
-#         tenant_id: Tenant identifier
-#         api_key: Tenant API key
-#         category: Specific category to create (e.g., "Identity & Access Review")
-#         integration_type: Type of integration (jumpcloud, aws-security, etc.)
-#         additional_params: Additional parameters for parameter context
-#
-#     Returns:
-#         Dict with tenant_pg_id, parameter_context_id, and category_pg_id
-#     """
-#     logger.info(f"Setting up tenant structure for: {tenant_id}, category: {category}, integration: {integration_type}")
-#
-#     # Serialize tenant/category creation across processes to avoid duplicates
-#     with tenant_lock(tenant_id):
-#         # Step 1: Create or get tenant-level process group (smart duplicate prevention + smart positioning)
-#         tenant_pg_name = f"{tenant_id}"
-#         logger.info(f"Ensuring tenant process group: {tenant_pg_name}")
-#
-#         doc = RedisClient.get_instance().hget(key="nifi:tenant", hash=tenant_pg_name)
-#         if doc is not None:
-#             logger.info(doc)
-#             doc = json.loads(doc)
-#             logger.info(
-#                 f"Found existing tenant process group: {tenant_pg_name} checking if category exists: {category}")
-#
-#             cat = RedisClient.get_instance().get(key=f"nifi:categories:tenant:{tenant_id}")
-#             if cat is not None:
-#                 cat = json.loads(cat)
-#                 if cat.get(category) is not None:
-#                     logger.info(f"Got existing tenant process group: {category}")
-#                     return {
-#                         "tenant_pg_id": doc.get("tenant_pg_id"),
-#                         "parameter_context_id": doc.get("pc_id"),
-#                         "category_pg_id": cat.get(category),
-#                     }
-#
-#                 else:
-#                     logger.info(f"The Category does not exists for {tenant_pg_name} tenant process group: {category}")
-#
-#                     category_position = flow_manager.get_smart_position_for_type(doc.get("tenant_pg_id"), "category",
-#                                                                                  category)
-#
-#                     category_pg_id = flow_manager.ensure_process_group(
-#                         parent_id=doc.get("tenant_pg_id"),
-#                         name=f"{category}",
-#                         position_x=category_position["x"],
-#                         position_y=category_position["y"],
-#                         comments=f"{category} integrations for tenant {tenant_id}"
-#                     )
-#
-#                     payload = {category: category_pg_id, **cat}
-#                     RedisClient.get_instance().set(key=f"nifi:categories:tenant:{tenant_id}", value=json.dumps(payload))
-#
-#                     pc_id = parameter_manager.ensure_tenant_parameter_context(tenant_id, integration_type,
-#                                                                               additional_params)
-#
-#                     return {
-#                         "tenant_pg_id": doc.get("tenant_pg_id"),
-#                         "parameter_context_id": doc.get("pc_id"),
-#                         "category_pg_id": category_pg_id
-#                     }
-#
-#         # Get smart position for tenant process group
-#         tenant_position = flow_manager.get_smart_position_for_type("root", "tenant", tenant_pg_name)
-#
-#         tenant_pg_id = flow_manager.ensure_process_group(
-#             parent_id="root",
-#             name=tenant_pg_name,
-#             position_x=tenant_position["x"],
-#             position_y=tenant_position["y"],
-#             comments=f"Tenant process group for {tenant_id} - contains all integrations"
-#         )
-#
-#         # Step 2: Create or update smart parameter context for the tenant (values only)
-#         pc_id = parameter_manager.ensure_tenant_parameter_context(
-#             tenant_id, integration_type, additional_params
-#         )
-#
-#         # IMPORTANT: Do NOT bind at tenant level or recurse here.
-#         # Binding is done only on the imported/updated flow root PG.
-#         recursive_results = {"total_processed": 0}
-#
-#         # Step 3: Create or get ONLY the specific category process group needed (smart duplicate prevention + smart positioning)
-#         category_pg_name = f"{category}"
-#         logger.info(f"Ensuring category process group: {category}")
-#
-#         # Get smart position for category process group
-#         category_position = flow_manager.get_smart_position_for_type(tenant_pg_id, "category", category_pg_name)
-#
-#         category_pg_id = flow_manager.ensure_process_group(
-#             parent_id=tenant_pg_id,
-#             name=category_pg_name,
-#             position_x=category_position["x"],
-#             position_y=category_position["y"],
-#             comments=f"{category} integrations for tenant {tenant_id}"
-#         )
-#
-#         payload = {category_pg_name: category_pg_id}
-#         RedisClient.get_instance().set(key=f"nifi:categories:tenant:{tenant_id}", value=json.dumps(payload))
-#
-#         RedisClient.get_instance().hset(key="nifi:tenant", hash=tenant_id,
-#                                         mapping={"tenant_pg_id": tenant_pg_id, "pc_id": pc_id})
-#
-#     # Log summary after releasing the lock (noop in scoped-binding mode)
-#     if recursive_results.get("total_processed", 0) > 0:
-#         assigned = recursive_results.get('total_assigned', 0)
-#         skipped = recursive_results.get('total_skipped', 0)
-#         errors = recursive_results.get('total_errors', 0)
-#         logger.info(
-#             f"📋 Recursive assignment summary: Processed: {recursive_results.get('total_processed', 0)}, "
-#             f"Assigned: {assigned}, Skipped: {skipped}, Errors: {errors}"
-#         )
-#
-#     return {
-#         "tenant_pg_id": tenant_pg_id,
-#         "parameter_context_id": pc_id,
-#         "category_pg_id": category_pg_id
-#     }
-
-def get_or_create_tenant_structure(
-        tenant_id: str,
-        category: str,
-        integration_type: str,
-        additional_params: Optional[Dict[str, Any]] = None,
-        stop_running_components_on_bind: bool = False,
-) -> Dict[str, str]:
+def get_or_create_tenant_structure(tenant_id: str, category: str, integration_type: str,
+                                   additional_params: Optional[Dict[str, Any]] = None,
+                                   stop_running_components_on_bind: bool = False) -> Dict[str, str]:
     """
     Ensure tenant PG, upsert tenant-level Parameter Context (values only),
     ensure requested category PG, and if tenant is new recursively assign
@@ -277,7 +142,8 @@ def get_or_create_tenant_structure(
 
 def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integration_type: str,
                                     category: str, flow_name: str, version: str = "latest",
-                                    additional_params: Optional[Dict[str, Any]] = None) -> None:
+                                    additional_params: Optional[Dict[str, Any]] = None,
+                                    update_controller_service=None) -> None:
     """
     Deploy an integration using hierarchical tenant structure with smart parameter context.
     
@@ -384,7 +250,6 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
         desired_pc_id = tenant_structure["parameter_context_id"]
         current_pc_id = parameter_manager.get_process_group_bound_pc_id(root_pg_id)
 
-
         if current_pc_id == desired_pc_id:
             logger.info("Root process group already bound to the desired parameter context; skipping bind")
         else:
@@ -397,6 +262,10 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
         # Step 7: Configure Kafka services if needed
         logger.info(f"Configuring Kafka controller services")
         kafka_services = controller_manager.configure_kafka_services(new_pg["id"], tenant_id)
+
+        if update_controller_service == "AWS":
+            controller_manager.configure_aws_services(new_pg["id"], additional_params=additional_params,
+                                                      tenant_id=tenant_id)
 
         # Step 8: Enable all controller services
         logger.info(f"Enabling controller services")
@@ -438,7 +307,6 @@ def deploy_integration_hierarchical(tenant_id: str, integration_name: str, integ
         raise
 
 
-
 def deploy_custom_integration(tenant_id: str, api_key: str, integration_name: str,
                               category: str, flow_name: str, version: str = "latest",
                               additional_params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -453,7 +321,8 @@ def deploy_custom_integration(tenant_id: str, api_key: str, integration_name: st
         category=category,
         flow_name=flow_name,
         version=version,
-        additional_params=additional_params
+        additional_params=additional_params,
+        update_controller_service=None
     )
 
 
@@ -472,7 +341,9 @@ def handle_deployment(tenant_id: str, integration: str):
                 integration_type=integration,
                 category=flow.get("category"),
                 flow_name=flow.get("registry_flow_name"),
-                version="latest"
+                version="latest",
+                update_controller_service=flow.get("update_controller_service")
+                if flow.get("update_controller_service") else None
             )
 
     else:
@@ -483,8 +354,11 @@ def handle_deployment(tenant_id: str, integration: str):
             integration_type=integration,
             category=flow_names.get("category"),
             flow_name=flow_names.get("registry_flow_name"),
-            version="latest"
+            version="latest",
+            update_controller_service=flow_names.get("update_controller_service")
+            if flow_names.get("update_controller_service") else None
         )
+
 
 def validate_integration_deployment_params(integration_type: str, provided_params: Dict[str, Any]) -> Dict[str, Any]:
     """Validate integration parameters before deployment."""
@@ -645,7 +519,6 @@ def get_nifi_version() -> str:
 
 
 def get_integration_secrets_from_vault(tenant_id: str, integration_name: str) -> Any:
-
     required_params = INTEGRATION_PARAMETERS.get(integration_name.lower())
     fetch_secret = False
     for key, value in required_params.items():
@@ -660,6 +533,11 @@ def get_integration_secrets_from_vault(tenant_id: str, integration_name: str) ->
         if not len(secret_lists): raise Exception("JumpCloud Secret lists not found")
 
         secrets_values = HashiCorpVault().get_secret(f"{tenant_id}/{integration_name}/{secret_lists[0]}")
+
+        if integration_name == "AWS":
+            secrets_values['aws_account_discovery_mode'] = "auto"
+            secrets_values['aws_target_accounts'] = "auto"
+            secrets_values["aws_cross_account_role_name"] = None
 
         return secrets_values
     else:

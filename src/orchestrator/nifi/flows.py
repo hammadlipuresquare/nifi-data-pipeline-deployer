@@ -187,9 +187,12 @@ class FlowManager(LoggerMixin):
 
         # Use KEEP_EXISTING strategy to preserve custom parameter contexts
         url = f"process-groups/{parent_pg_id}/process-groups?parameterContextHandlingStrategy=KEEP_EXISTING"
-
+        self.logger.info("="*30)
+        self.logger.info(url)
+        self.logger.info("Importing flow from registry")
         self.logger.info(f"Importing flow '{flow_info.flow_name}' version {use_version}")
         self.logger.info(f"Registry: {flow_info.registry_id}, Bucket: {flow_info.bucket_id}, Flow: {flow_info.flow_id}")
+        self.logger.info("=" * 30)
 
         pg_response = nifi_client.post_json(url, import_body)
 

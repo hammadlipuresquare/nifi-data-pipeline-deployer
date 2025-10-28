@@ -64,6 +64,25 @@ class KafkaWorker(LoggerMixin):
         """Check if Kafka consumer is initialized."""
         return self.consumer is not None and self.producer is not None
 
+    def _on_error(self, err):
+        # Called by librdkafka on internal errors. Non-fatal errors are retried automatically.
+        try:
+            self.logger.warning(f"Kafka client error callback: {err}")
+        except Exception:
+            pass
+
+    def _on_assign(self, consumer, partitions):
+        try:
+            self.logger.info(f"Partitions assigned: {partitions}")
+        except Exception:
+            pass
+
+    def _on_revoke(self, consumer, partitions):
+        try:
+            self.logger.info(f"Partitions revoked: {partitions}")
+        except Exception:
+            pass
+
     def _setup_kafka_clients(self) -> None:
         """Set up Kafka consumer and producer."""
         # Consumer configuration
@@ -75,24 +94,60 @@ class KafkaWorker(LoggerMixin):
             'auto.commit.interval.ms': config.kafka_auto_commit_interval_ms,
             'session.timeout.ms': config.kafka_session_timeout_ms,
             'max.poll.interval.ms': config.kafka_max_poll_interval_ms,
+            # Hardening: keep-alive and bounded reconnect backoff
+            'socket.keepalive.enable': True,
+            'reconnect.backoff.ms': 500,  # initial backoff before reconnect
+            'reconnect.backoff.max.ms': 30000,  # cap reconnect backoff to 30s
+            'request.timeout.ms': 30000,  # network request timeout (including JoinGroup)
+            'heartbeat.interval.ms': 10000,  # must be lower than session.timeout.ms
+            'statistics.interval.ms': 60000,  # emit internal stats every 60s
+            'error_cb': self._on_error,
         }
 
         # Producer configuration (simple local setup)
         producer_config = {
             'bootstrap.servers': config.kafka_bootstrap_servers,
             'acks': '1',  # Simplified for local development
-            'retries': 3
+            'retries': 3,
+            'error_cb': self._on_error,
         }
+
+        # --- Optional authentication (SASL/SSL) ---
+        # Configure from config if provided; keeps plaintext as default.
+        security_protocol = getattr(config, "kafka_security_protocol", None)
+        if security_protocol:
+            consumer_config["security.protocol"] = security_protocol
+            producer_config["security.protocol"] = security_protocol
+
+            # If not PLAINTEXT, wire up SASL params when available.
+            if str(security_protocol).upper() != "PLAINTEXT":
+                sasl_mechanism = getattr(config, "kafka_sasl_mechanism", None)
+                sasl_username = getattr(config, "kafka_sasl_username", None)
+                sasl_password = getattr(config, "kafka_sasl_password", None)
+
+                if sasl_mechanism:
+                    consumer_config["sasl.mechanism"] = sasl_mechanism
+                    producer_config["sasl.mechanism"] = sasl_mechanism
+                if sasl_username:
+                    consumer_config["sasl.username"] = sasl_username
+                    producer_config["sasl.username"] = sasl_username
+                if sasl_password:
+                    consumer_config["sasl.password"] = sasl_password
+                    producer_config["sasl.password"] = sasl_password
 
         self.consumer = Consumer(consumer_config)
         self.producer = Producer(producer_config)
 
         # Subscribe to all topics in the same consumer group
-        self.consumer.subscribe([
-            config.kafka_deployment_topic,
-            config.kafka_credentials_topic,
-            config.kafka_deletions_topic,
-        ])
+        self.consumer.subscribe(
+            [
+                config.kafka_deployment_topic,
+                config.kafka_credentials_topic,
+                config.kafka_deletions_topic,
+            ],
+            on_assign=self._on_assign,
+            on_revoke=self._on_revoke
+        )
 
         self.logger.info("Kafka clients set up successfully")
 
@@ -184,11 +239,29 @@ class KafkaWorker(LoggerMixin):
 
             self.logger.info(f"Processing {integration_name} deployment for tenant: {tenant_id}")
 
-            handle_deployment(tenant_id, integration_name)
+            if integration_name in {"aws", "aws_role"}:
+                print(f"Received steampipe pipeline integration_name: {integration_name}")
 
-            self.logger.info(f"Successfully deployed {integration_name} pipeline for {tenant_id}")
+                aws_asset_register_kafka_topic = 'asset_register_trigger'
+
+                payload = {
+                    "tenant_id": tenant_id,
+                    "module": "asset_register",
+                    "event_type": "AssetRegisterTrigger"
+                }
+
+                message_json = json.dumps(payload).encode("utf-8")
+                self.producer.produce(
+                    aws_asset_register_kafka_topic,
+                    value=message_json,
+                    callback=lambda err, msg: self.logger.error(f"Produce failed: {err}") if err else None
+                )
+                self.producer.poll(0)
+            else:
+                handle_deployment(tenant_id, integration_name)
+
+                self.logger.info(f"Successfully deployed {integration_name} pipeline for {tenant_id}")
             return True
-
         except ValueError as e:
             # Validation errors - don't retry
             self.logger.error(f"Validation error: {e}")

@@ -33,12 +33,21 @@ INTEGRATION_NIFI_FLOW_NAMES = {
             "registry_flow_name": "jumpcloud-events"
         }
     ],
-    "aws":
+
+    "aws": [
         {
             "name": "AWS_Asset_Registry",
             "category": IntegrationCategory.ASSET_REGISTER,
             "registry_flow_name": "aws"
         },
+        {
+            "name": "AWS_VPC_Flow_Logs",
+            "category": IntegrationCategory.VULNERABILITY,
+            "registry_flow_name": "aws-vpc-flow-logs",
+            "update_controller_service": "AWS"
+        }
+    ],
+
     "wazuh_api": [
         {
             "name": "Wazuh_Alerts_Discovery",

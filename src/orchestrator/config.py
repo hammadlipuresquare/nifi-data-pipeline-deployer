@@ -33,6 +33,10 @@ class OrchestratorConfig(BaseSettings):
     kafka_max_poll_interval_ms: int = Field(default=300000, env="KAFKA_MAX_POLL_INTERVAL_MS")
     backoff_base_ms: int = Field(default=500, env="KAFKA_BACKOFF_BASE_MS")
     backoff_max_ms: int = Field(default=60000, env="KAFKA_BACKOFF_MAX_MS")
+    kafka_security_protocol: str = Field(default="SASL_PLAINTEXT", env="KAFKA_SECURITY_PROTOCOL")
+    kafka_sasl_mechanism: str = Field(default="PLAIN", env="KAFKA_SASL_MECHANISM")
+    kafka_sasl_username: str = Field(default="user1", env="KAFKA_SASL_USERNAME")
+    kafka_sasl_password: str = Field(default="", env="KAFKA_SASL_PASSWORD")
 
     # Redis Configuration
     redis_host: str = Field(default="localhost", env="REDIS_HOST")
@@ -40,7 +44,7 @@ class OrchestratorConfig(BaseSettings):
     redis_db: int = Field(default=0, env="REDIS_DB")
     redis_password: Optional[str] = Field(default=None, env="REDIS_PASSWORD")
     redis_ssl: bool = Field(default=False, env="REDIS_SSL")
-    
+
     # NiFi Pipeline Kafka Configuration (for deployed pipelines)
     nifi_kafka_bootstrap_servers: str = Field(default="kafka.apache:9092", env="NIFI_KAFKA_BOOTSTRAP_SERVERS")
     nifi_kafka_security_protocol: str = Field(default="SASL_PLAINTEXT", env="NIFI_KAFKA_SECURITY_PROTOCOL")

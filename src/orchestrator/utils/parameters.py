@@ -31,6 +31,21 @@ INTEGRATION_PARAMETERS = {
             "description": "AWS secret access key for authentication",
             "sensitive": True,
             "source": "secret_access_key"
+        },
+        "AWS_ACCOUNT_DISCOVERY_MODE": {
+            "description": "AWS account discovery mode",
+            "sensitive": False,
+            "source": "aws_account_discovery_mode"
+        },
+        "AWS_TARGET_ACCOUNTS": {
+            "description": "AWS target accounts for authentication",
+            "sensitive": False,
+            "source": "aws_target_accounts"
+        },
+        "AWS_CROSS_ACCOUNT_ROLE_NAME": {
+            "description": "AWS cross account role name",
+            "sensitive": False,
+            "source": "aws_cross_account_role_name"
         }
     },
     "wazuh_api": {
