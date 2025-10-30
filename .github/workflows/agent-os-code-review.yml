@@ -1,0 +1,101 @@
+name: Agent OS Code Review
+
+# This workflow uses organization-level secrets directly
+# No need for reusable workflows - just deploy this to each repo
+
+on:
+  # Weekly schedule - Sundays at 2 AM UTC
+  schedule:
+    - cron: '0 2 * * 0'
+  
+  # On pull requests
+  pull_request:
+    branches: [ main, master, develop ]
+    types: [ opened, synchronize, reopened ]
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      review_type:
+        description: 'Type of review'
+        required: true
+        default: 'audit'
+        type: choice
+        options:
+        - audit
+        - security
+        - review
+      project_type:
+        description: 'Project type'
+        required: false
+        default: 'auto'
+        type: choice
+        options:
+        - auto
+        - backend-api
+        - dashboard-ui
+        - data-pipeline
+        - infrastructure
+
+permissions:
+  contents: write  # Needed to create branches and PRs
+  pull-requests: write
+  issues: write
+  security-events: write
+
+jobs:
+  code-review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+    # Harden runner for supply chain security
+    - name: Harden Runner
+      uses: step-security/harden-runner@5c7944e73c4c2a096b17a9cb74d65b6c2bbafbde  # v2.9.1
+      with:
+        egress-policy: audit
+    
+    # Checkout - pinned by SHA for security
+    - name: Checkout code
+      uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332  # v4.1.7
+      with:
+        fetch-depth: 0
+    
+    # Setup Python with dependency caching
+    - name: Setup Python
+      uses: actions/setup-python@f677139bbe7f9c59b41e40162b753c062f5d49a3  # v5.2.0
+      with:
+        python-version: '3.11'
+        # Cache is optional - only enable if requirements file exists
+        cache: ${{ hashFiles('**/requirements.txt', '**/pyproject.toml') != '' && 'pip' || '' }}
+    
+    # Run Agent OS Code Review
+    # Uses organization-level secret: ANTHROPIC_API_KEY (automatically available)
+    - name: Run Agent OS Code Review
+      uses: securedotcom/agent-os-action@v2.1.6
+      with:
+        review-type: ${{ github.event.inputs.review_type || 'audit' }}
+        project-path: '.'
+        project-type: ${{ github.event.inputs.project_type || 'auto' }}
+        fail-on-blockers: 'true'
+        comment-on-pr: 'true'
+        upload-reports: 'true'
+        only-changed: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+        max-files: ${{ github.event_name == 'pull_request' && '25' || '50' }}
+        cost-limit: ${{ github.event_name == 'pull_request' && '0.25' || '1.0' }}
+        # Organization-level secrets - automatically available to all repos
+        anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+        slack-webhook-url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        notify-on: 'on-blockers'  # Send Slack notification only when blockers are found
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    
+    # Upload artifacts - pinned by SHA
+    - name: Upload Review Reports
+      if: always()
+      uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874  # v4.4.0
+      with:
+        name: code-review-reports-${{ github.run_number }}
+        path: .agent-os/reviews/
+        retention-days: 90
+
