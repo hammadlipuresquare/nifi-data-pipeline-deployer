@@ -77,30 +77,52 @@ class NiFiClient(LoggerMixin):
             raise NiFiAPIError(f"GET {url} failed: {e}")
 
     def post(self, endpoint: str, **kwargs) -> requests.Response:
-        """Make authenticated POST request."""
-        self.authenticate()
+        """Make authenticated POST request with retry on auth failure."""
         url = f"{self.api_url}/{endpoint.lstrip('/')}"
         self.logger.debug(f"POST {url}")
         
-        try:
-            response = self.session.post(url, **kwargs)
-            self._handle_response(response, "POST", url)
-            return response
-        except requests.RequestException as e:
-            raise NiFiAPIError(f"POST {url} failed: {e}")
+        for attempt in range(2):  # Try twice: once with existing auth, once with fresh auth
+            try:
+                self.authenticate()
+                response = self.session.post(url, **kwargs)
+                self._handle_response(response, "POST", url)
+                return response
+            except NiFiAuthenticationError as e:
+                if attempt == 0:
+                    self.logger.warning(f"Authentication failed on attempt {attempt + 1}, retrying with fresh token")
+                    self._authenticated = False  # Force re-authentication
+                    continue
+                else:
+                    raise  # Re-raise on second attempt
+            except requests.RequestException as e:
+                raise NiFiAPIError(f"POST {url} failed: {e}")
+        
+        # Should never reach here, but just in case
+        raise NiFiAPIError(f"POST {url} failed after retries")
 
     def put(self, endpoint: str, **kwargs) -> requests.Response:
-        """Make authenticated PUT request."""
-        self.authenticate()
+        """Make authenticated PUT request with retry on auth failure."""
         url = f"{self.api_url}/{endpoint.lstrip('/')}"
         self.logger.debug(f"PUT {url}")
         
-        try:
-            response = self.session.put(url, **kwargs)
-            self._handle_response(response, "PUT", url)
-            return response
-        except requests.RequestException as e:
-            raise NiFiAPIError(f"PUT {url} failed: {e}")
+        for attempt in range(2):  # Try twice: once with existing auth, once with fresh auth
+            try:
+                self.authenticate()
+                response = self.session.put(url, **kwargs)
+                self._handle_response(response, "PUT", url)
+                return response
+            except NiFiAuthenticationError as e:
+                if attempt == 0:
+                    self.logger.warning(f"Authentication failed on attempt {attempt + 1}, retrying with fresh token")
+                    self._authenticated = False  # Force re-authentication
+                    continue
+                else:
+                    raise  # Re-raise on second attempt
+            except requests.RequestException as e:
+                raise NiFiAPIError(f"PUT {url} failed: {e}")
+        
+        # Should never reach here, but just in case
+        raise NiFiAPIError(f"PUT {url} failed after retries")
 
     def delete(self, endpoint: str, **kwargs) -> requests.Response:
         """Make authenticated DELETE request."""
@@ -131,8 +153,8 @@ class NiFiClient(LoggerMixin):
             self.logger.error(f"{error_msg}: Unable to read response body")
         
         # Raise specific exception types based on status code
-        if response.status_code == 401:
-            self._authenticated = False  # Reset auth state
+        if response.status_code in [401, 403]:
+            self._authenticated = False  # Reset auth state for both 401 and 403
             raise NiFiAuthenticationError(
                 f"Authentication failed: {error_msg}",
                 status_code=response.status_code,
