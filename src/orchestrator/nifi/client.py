@@ -46,11 +46,26 @@ class NiFiClient(LoggerMixin):
         
         for url in endpoints:
             try:
-                r = session.post(url, data={"username": user, "password": pw})
+                # Match curl exactly: explicit Content-Type header and form data
+                headers = {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "User-Agent": "curl/7.68.0"  # Match curl user agent
+                }
+                data = f"username={user}&password={pw}"
+                
+                r = session.post(url, data=data, headers=headers)
                 ct = r.headers.get("Content-Type", "")
                 text = (r.text or "").strip()
                 
-                if r.ok and "html" not in ct.lower() and "\n" not in text and "." in text:
+                self.logger.debug(f"Token request to {url}: status={r.status_code}, content-type={ct}")
+                self.logger.debug(f"Response text (first 100 chars): {text[:100]}")
+                self.logger.debug(f"Response cookies: {dict(r.cookies)}")
+                
+                # Check for valid JWT token (not HTML)
+                if r.ok and "text/plain" in ct.lower() and not text.startswith("<!--"):
+                    # For staging compatibility: DO NOT preserve cookies from authentication
+                    # This mimics curl's stateless behavior and prevents session conflicts
+                    self.logger.debug(f"Token obtained successfully, not preserving cookies for staging compatibility")
                     return text
                     
                 last_err = f"{r.status_code} {ct} sample={text[:120]!r}"
@@ -70,7 +85,17 @@ class NiFiClient(LoggerMixin):
         self.logger.debug(f"GET {url}")
         
         try:
-            response = self.session.get(url, **kwargs)
+            # Create fresh session for this request to mimic curl behavior
+            fresh_session = requests.Session()
+            fresh_session.verify = self.session.verify
+            
+            # Copy only the Authorization header, not cookies or other session state
+            fresh_session.headers.update({
+                "Authorization": self.session.headers.get("Authorization"),
+                "User-Agent": "curl/7.68.0"  # Match curl exactly
+            })
+            
+            response = fresh_session.get(url, **kwargs)
             self._handle_response(response, "GET", url)
             return response
         except requests.RequestException as e:
@@ -81,9 +106,27 @@ class NiFiClient(LoggerMixin):
         self.authenticate()
         url = f"{self.api_url}/{endpoint.lstrip('/')}"
         self.logger.debug(f"POST {url}")
+        self.logger.debug(f"POST headers: {dict(self.session.headers)}")
+        self.logger.debug(f"POST cookies: {dict(self.session.cookies)}")
+        if 'json' in kwargs:
+            self.logger.debug(f"POST JSON payload: {kwargs['json']}")
+        if 'data' in kwargs:
+            self.logger.debug(f"POST data payload: {kwargs['data']}")
         
         try:
-            response = self.session.post(url, **kwargs)
+            # Create fresh session for this request to mimic curl behavior
+            fresh_session = requests.Session()
+            fresh_session.verify = self.session.verify
+            
+            # Copy only the Authorization header, not cookies or other session state
+            fresh_session.headers.update({
+                "Authorization": self.session.headers.get("Authorization"),
+                "User-Agent": "curl/7.68.0"  # Match curl exactly
+            })
+            
+            response = fresh_session.post(url, **kwargs)
+            self.logger.debug(f"POST response status: {response.status_code}")
+            self.logger.debug(f"POST response headers: {dict(response.headers)}")
             self._handle_response(response, "POST", url)
             return response
         except requests.RequestException as e:
@@ -96,7 +139,17 @@ class NiFiClient(LoggerMixin):
         self.logger.debug(f"PUT {url}")
         
         try:
-            response = self.session.put(url, **kwargs)
+            # Create fresh session for this request to mimic curl behavior
+            fresh_session = requests.Session()
+            fresh_session.verify = self.session.verify
+            
+            # Copy only the Authorization header, not cookies or other session state
+            fresh_session.headers.update({
+                "Authorization": self.session.headers.get("Authorization"),
+                "User-Agent": "curl/7.68.0"  # Match curl exactly
+            })
+            
+            response = fresh_session.put(url, **kwargs)
             self._handle_response(response, "PUT", url)
             return response
         except requests.RequestException as e:
@@ -109,7 +162,17 @@ class NiFiClient(LoggerMixin):
         self.logger.debug(f"DELETE {url}")
         
         try:
-            response = self.session.delete(url, **kwargs)
+            # Create fresh session for this request to mimic curl behavior
+            fresh_session = requests.Session()
+            fresh_session.verify = self.session.verify
+            
+            # Copy only the Authorization header, not cookies or other session state
+            fresh_session.headers.update({
+                "Authorization": self.session.headers.get("Authorization"),
+                "User-Agent": "curl/7.68.0"  # Match curl exactly
+            })
+            
+            response = fresh_session.delete(url, **kwargs)
             self._handle_response(response, "DELETE", url)
             return response
         except requests.RequestException as e:
