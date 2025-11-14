@@ -50,11 +50,6 @@ INTEGRATION_NIFI_FLOW_NAMES = {
 
     "wazuh_api": [
         {
-            "name": "Wazuh_Alerts_Discovery",
-            "category": IntegrationCategory.SIEM,
-            "registry_flow_name": "wazuh-alerts"
-        },
-        {
             "name": "Wazuh_Agents_Discovery",
             "category": IntegrationCategory.SIEM,
             "registry_flow_name": "wazuh-agents"

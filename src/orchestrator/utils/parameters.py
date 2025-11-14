@@ -54,17 +54,17 @@ INTEGRATION_PARAMETERS = {
             "sensitive": False,
             "source": "tenant_id"
         },
-        "WAZUH_USER": {
+        "WAZUH_API_USERNAME": {
             "description": "WAZUH user name for authentication",
             "sensitive": False,
             "source": "username"
         },
-        "WAZUH_PASS": {
+        "WAZUH_API_PASSWORD": {
             "description": "WAZUH password for authentication",
             "sensitive": True,
             "source": "password"
         },
-        "WAZUH_URL": {
+        "WAZUH_API_URL": {
             "description": "WAZUH URL for authentication",
             "sensitive": False,
             "source": "url"
