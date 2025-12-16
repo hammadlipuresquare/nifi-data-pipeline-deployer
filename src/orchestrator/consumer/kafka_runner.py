@@ -370,12 +370,34 @@ class KafkaWorker(LoggerMixin):
             self.logger.warning(f"Could not ensure topic '{topic}' exists: {e}")
 
     def _extract_and_validate_tenant_id_and_integration(self, raw_message) -> Tuple[str, str]:
-        """Extract and validate tenant ID and integration."""
+        """Extract and validate tenant ID and integration.
+        
+        Supports payloads with optional 'subject' field (e.g., 'integration.sync').
+        Normalizes integration names by stripping 'secure_' prefix if present.
+        
+        Examples:
+            {"tenant_id": "test", "integration": "wazuh_api"} -> ("test", "wazuh_api")
+            {"tenant_id": "test", "integration": "secure_wazuh_api", "subject": "integration.sync"} 
+                -> ("test", "wazuh_api")
+        """
         data = json.loads(raw_message.decode("utf-8"))
         tenant_id = data.get("tenant_id")
         integration = (data.get("integration") or "").lower()
-        if not tenant_id or not integration: raise ValueError(
-            "tenant_id and integration are required for credentials updates")
+        subject = data.get("subject", "")
+        
+        # Log subject if present (whitelisted field)
+        if subject:
+            self.logger.info(f"Received message with subject: {subject}")
+        
+        # Normalize integration name: strip 'secure_' prefix if present
+        if integration.startswith("secure_"):
+            original_integration = integration
+            integration = integration[len("secure_"):]  # Remove 'secure_' prefix
+            self.logger.info(f"Normalized integration name: '{original_integration}' -> '{integration}'")
+        
+        if not tenant_id or not integration:
+            raise ValueError("tenant_id and integration are required")
+        
         return tenant_id, integration
 
 

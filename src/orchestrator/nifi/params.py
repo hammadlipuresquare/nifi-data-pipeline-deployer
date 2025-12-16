@@ -697,6 +697,51 @@ class ParameterManager(LoggerMixin):
         }
 
         try:
+            # FIRST: Assign parameter context to the root PG itself (not just children)
+            # This is critical for imported flows that need the tenant's PC
+            if current_depth == 0:
+                root_pg = flow_manager.get_process_group(root_pg_id)
+                if root_pg:
+                    root_pg_name = root_pg.get("component", {}).get("name", "Root")
+                    current_root_pc = root_pg.get("component", {}).get("parameterContext", {})
+                    current_root_pc_id = current_root_pc.get("id") if current_root_pc else None
+
+                    if current_root_pc_id == pc_id:
+                        self.logger.info(f"   ✅ Root PG '{root_pg_name}' already has correct parameter context")
+                        results["skipped"].append({
+                            "pg_id": root_pg_id,
+                            "name": root_pg_name,
+                            "reason": "already_assigned"
+                        })
+                        results["total_skipped"] += 1
+                    else:
+                        self.logger.info(f"   🔗 Assigning parameter context to ROOT PG '{root_pg_name}' ({root_pg_id})")
+                        root_assignment_result = self._bind_parameter_context_recursive(root_pg_id, pc_id)
+
+                        if "error" not in root_assignment_result:
+                            results["assignments"].append({
+                                "pg_id": root_pg_id,
+                                "name": root_pg_name,
+                                "previous_pc_id": current_root_pc_id,
+                                "new_pc_id": pc_id,
+                                "status": "success",
+                                "is_root": True
+                            })
+                            results["total_assigned"] += 1
+                            self.logger.info(f"   ✅ Successfully assigned parameter context to ROOT PG '{root_pg_name}'")
+                        else:
+                            results["errors"].append({
+                                "pg_id": root_pg_id,
+                                "name": root_pg_name,
+                                "error": root_assignment_result.get("error", "Unknown error"),
+                                "is_root": True
+                            })
+                            results["total_errors"] += 1
+                            self.logger.warning(
+                                f"   ❌ Failed to assign parameter context to ROOT PG '{root_pg_name}': {root_assignment_result.get('error')}")
+
+                    results["total_processed"] += 1
+
             # Get all child process groups
             children = self._get_child_process_groups(root_pg_id)
 
